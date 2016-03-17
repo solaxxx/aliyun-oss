@@ -4,3 +4,9 @@
   "description": "aliyunOSS",
   "main": "index.js",
 }
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/solaxxx/aliyun-oss"
+  },
+  "author": "",
+  "license": "ISC",
