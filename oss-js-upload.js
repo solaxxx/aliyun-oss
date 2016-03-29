@@ -123,7 +123,8 @@
           loadNext();
         }
         else {
-          result.file_size = file.size;
+          result.size = file.size;
+          result.type = file.type;
           callback(null, result);
         }
       };
@@ -148,12 +149,51 @@
       loadNext();
     };
 
+    // 把base64字符串转换成ArrayBuffer格式数据
+    var base64ToArrayBuffer = function (_base64, callback) {
+      var result = {
+        chunks: []
+      };
+      var base64 = _base64.split(',')[1];
+      var base64Info = _base64.split(',')[0];
+      var type = base64Info.split(';')[0].split(':')[1];
+      if (!type) {
+        if (typeof options.onerror == 'function') {
+          options.onerror('无法获取该base64的文件类型');
+        }
+      }
+      var binary_string;
+      try {
+        binary_string =  window.atob(base64);
+      } catch (e) {
+        if (typeof options.onerror == 'function') {
+          options.onerror('无法正常转换该base64字符串为二进制');
+        }
+      }
+
+      var len = binary_string.length;
+      var bytes = new Uint8Array( len );
+      for (var i = 0; i < len; i++)        {
+          bytes[i] = binary_string.charCodeAt(i);
+      }
+      bytes = bytes.buffer;
+      var chunkSize = self._config.chunkSize;
+      var chunksNum = Math.ceil(len / chunkSize);
+      var currentChunk = 0;
+      for (var k = 0; k < chunksNum; k ++) {
+        result.chunks.push(bytes.slice(k * chunkSize, k * chunkSize + chunkSize - 1));
+      }
+      result.size = bytes.byteLength;
+      result.type = type;
+      if (callback) callback (null, result);
+    }
+
     var uploadSingle = function (result, callback) {
       var params = {
         Bucket: self._config.bucket,
         Key: options.key,
         Body: result.chunks[0],
-        ContentType: file.type || ''
+        ContentType: result.type || ''
       };
       _extend(params, options.headers);
 
@@ -163,7 +203,7 @@
         if (typeof options.onprogress == 'function') {
           options.onprogress({
             loaded: p.loaded,
-            total: file.size
+            total: result.size
           });
         }
       });
@@ -184,7 +224,7 @@
         var params = {
           Bucket: self._config.bucket,
           Key: options.key,
-          ContentType: file.type || ''
+          ContentType: result.type || ''
         };
         _extend(params, options.headers);
 
@@ -277,7 +317,7 @@
             if (typeof options.onprogress == 'function') {
               options.onprogress({
                 loaded: loaded,
-                total: file.size
+                total: result.size
               });
             }
           });
@@ -307,27 +347,53 @@
       init();
     };
 
-    readFile(function (err, result) {
-      var callback = function (err, res) {
-        if (err) {
-          if (typeof options.onerror == 'function') {
-            options.onerror(err);
+    if (options.base64) {
+      base64ToArrayBuffer(options.base64, function (err, result) {
+        var callback = function (err, res) {
+          if (err) {
+            if (typeof options.onerror == 'function') {
+              options.onerror(err);
+            }
+            return;
           }
-          return;
-        }
 
-        if (typeof options.oncomplete == 'function') {
-          options.oncomplete(res);
-        }
-      };
+          if (typeof options.oncomplete == 'function') {
+            options.oncomplete(res);
+          }
+        };
 
-      if (result.chunks.length == 1) {
-        uploadSingle(result, callback)
-      }
-      else {
-        uploadMultipart(result, callback);
-      }
-    });
+        if (result.chunks.length == 1) {
+          uploadSingle(result, callback)
+        }
+        else {
+          uploadMultipart(result, callback);
+        }
+      });
+    }
+
+    if (options.file) {
+      readFile(function (err, result) {
+        var callback = function (err, res) {
+          if (err) {
+            if (typeof options.onerror == 'function') {
+              options.onerror(err);
+            }
+            return;
+          }
+
+          if (typeof options.oncomplete == 'function') {
+            options.oncomplete(res);
+          }
+        };
+
+        if (result.chunks.length == 1) {
+          uploadSingle(result, callback)
+        }
+        else {
+          uploadMultipart(result, callback);
+        }
+      });
+    }
 
   };
 
