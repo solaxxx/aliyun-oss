@@ -87,7 +87,7 @@
       return;
     }
 
-    if (!options.file) {
+    if (!options.file && !options.base64) {
       if (typeof options.onerror == 'function') {
         options.onerror('需要 file');
       }
