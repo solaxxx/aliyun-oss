@@ -22,6 +22,127 @@
     }
   };
 
+  // 控制oss的上传
+  function OssUploadCtrl (options) {
+    this.options = options;
+    this._reqList = [];
+  }
+
+  /**
+   * [abort description]
+   * @return {[type]} [description]
+   */
+  OssUploadCtrl.prototype.abort = function () {
+    if (this.isComplete()) return; // 如果已经完成，则不能再调用abort
+    if (this.isSingle()) {
+      this.abortSingle();
+    } else if (this.isMulti()) {
+      this.abortMulti();
+    } else {
+      var onabort = this.options.uploadOptions.onabort;
+      if (typeof onabort === 'function') {
+        this.options.uploadOptions.onabort();
+      }
+    }
+    this.setAsAbort();
+  }
+
+  // 标记为已经中断上传了，可以根据这个特性做更多细粒度的中断控制
+  OssUploadCtrl.prototype.setAsAbort = function () {
+    this._isAbort = true;
+  }
+
+  // 判断是否已经中断
+  OssUploadCtrl.prototype.isAbort = function () {
+    return !!this._isAbort;
+  }
+
+  // 终端单片数据上传
+  OssUploadCtrl.prototype.abortSingle = function () {
+    this.abortReqList(); // 中断上传
+    var onabort = this.options.uploadOptions.onabort;
+    if (typeof onabort === 'function') {
+      this.options.uploadOptions.onabort();
+    }
+  }
+
+  // 中断多片数据上传
+  OssUploadCtrl.prototype.abortMulti = function () {
+    this.abortReqList();
+    if (this._uploadId) {
+      var oss = this.options.oss;
+      oss.abortMultipartUpload({
+        Bucket: this.options.Bucket,
+        Key: this.options.Key,
+        UploadId: this._uploadId
+      }, (function (err, reqId) {
+      }).bind(this));
+    }
+    var onabort = this.options.uploadOptions.onabort;
+    if (typeof onabort === 'function') {
+      this.options.uploadOptions.onabort(this._uploadId);
+    }
+  }
+
+  // 针对只上传一个文件片的，保存req对象
+  OssUploadCtrl.prototype.setReq = function (req) {
+    this._req = req;
+  }
+  // 针对上传多个文件片的，保存上传uploadId
+  OssUploadCtrl.prototype.setUploadId = function (uploadId) {
+    this._uploadId = uploadId;
+  }
+
+  // 保存模式，single, multi
+  OssUploadCtrl.prototype.setType = function (type) {
+    this._type = type;
+  }
+
+  // 获取模式
+  OssUploadCtrl.prototype.getType = function (type) {
+    return this._type;
+  }
+
+  // 设置为上传单片模式
+  OssUploadCtrl.prototype.setAsSingle = function () {
+    this.setType('single');
+  }
+
+  // 设置为上传多片模式
+  OssUploadCtrl.prototype.setAsMulti = function () {
+    this.setType('multi');
+  }
+
+  // 标记为完成状态
+  OssUploadCtrl.prototype.setAsComplete = function () {
+    this._isComplete = true;
+  }
+
+  OssUploadCtrl.prototype.isComplete = function () {
+    return !!this._isComplete;
+  }
+
+  OssUploadCtrl.prototype.isMulti = function () {
+    return this.getType() === 'multi';
+  }
+
+  OssUploadCtrl.prototype.isSingle = function () {
+    return this.getType() === 'single';
+  }
+
+  // 把上传过程中创造的req对象保存起来，在abort的时候，把这些req都abort了，并清空
+  OssUploadCtrl.prototype.addReqList = function (req) {
+    this._reqList.push(req);
+  }
+
+  // 中断所有req
+  OssUploadCtrl.prototype.abortReqList = function () {
+    this._reqList.forEach((function (req) {
+      req.abort();
+    }).bind(this));
+    this._reqList = [];
+  }
+
   function OssUpload(config) {
     if (!config) {
       // console.log('需要 config');
@@ -102,9 +223,15 @@
       return;
     }
     // 去掉 key 开头的 /
-    options.key.replace(new RegExp("^\/"), '');
+    options.key = options.key.replace(new RegExp("^\/"), '');
 
     var self = this;
+    var ossUploadCtrl = new OssUploadCtrl({
+      oss: this.oss,
+      Bucket: self._config.bucket,
+      Key: options.key,
+      uploadOptions: options
+    });
 
     var readFile = function (callback) {
       var result = {
@@ -189,6 +316,8 @@
     }
 
     var uploadSingle = function (result, callback) {
+      if (ossUploadCtrl.isAbort()) return; // 如果已经中断，就不上传了
+      ossUploadCtrl.setAsSingle(); // 标记为单片上传
       var params = {
         Bucket: self._config.bucket,
         Key: options.key,
@@ -198,6 +327,7 @@
       _extend(params, options.headers);
 
       var req = self.oss.putObject(params, callback);
+      ossUploadCtrl.addReqList(req); // 添加req
 
       req.on('httpUploadProgress', function(p) {
         if (typeof options.onprogress == 'function') {
@@ -210,6 +340,8 @@
     };
 
     var uploadMultipart = function (result, callback) {
+      if (ossUploadCtrl.isAbort()) return; // 如果已经中断，就不上传了
+      ossUploadCtrl.setAsMulti(); // 标记为多片上传
       var maxUploadTries = options.maxRetry || 3;
       var uploadId;
       var loadedNum = 0;
@@ -230,6 +362,8 @@
 
         self.oss.createMultipartUpload(params,
             function (mpErr, res) {
+              if (ossUploadCtrl.isAbort()) return; // 如果已经中断，就不上传了
+
               if (mpErr) {
                 // console.log('Error!', mpErr);
                 callback(mpErr);
@@ -238,7 +372,7 @@
 
               // console.log("Got upload ID", res.UploadId);
               uploadId = res.UploadId;
-
+              ossUploadCtrl.setUploadId(uploadId); // 保存uploadId
               uploadPart(0);
             });
       };
@@ -271,6 +405,8 @@
             PartNumber: partNum + 1,
             loaded: 0
           };
+
+          if (ossUploadCtrl.isAbort()) return; // 如果已经中断，就不上传了
 
           var req = self.oss.uploadPart(partParams, function (multiErr, mData) {
             if (multiErr) {
@@ -305,6 +441,7 @@
               uploadPart(latestUploadNum + 1);
             }
           });
+          ossUploadCtrl.addReqList(req); // 添加req
 
           req.on('httpUploadProgress', function(p) {
             multipartMap.Parts[partNum].loaded = p.loaded;
@@ -358,6 +495,7 @@
           }
 
           if (typeof options.oncomplete == 'function') {
+            ossUploadCtrl.setAsComplete();
             options.oncomplete(res);
           }
         };
@@ -382,6 +520,7 @@
           }
 
           if (typeof options.oncomplete == 'function') {
+            ossUploadCtrl.setAsComplete();
             options.oncomplete(res);
           }
         };
@@ -395,6 +534,7 @@
       });
     }
 
+    return ossUploadCtrl; // 返回一个oss上传控制对象
   };
 
   window.OssUpload = OssUpload;
