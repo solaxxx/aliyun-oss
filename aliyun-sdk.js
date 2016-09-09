@@ -1731,7 +1731,11 @@ ALY.Request = inherit({
 
     if (this.httpRequest.stream) { // abort HTTP stream
       this.httpRequest.stream.abort();
-      this.httpRequest._abortCallback();
+      if (this.httpRequest._abortCallback) {
+        this.httpRequest._abortCallback();
+      } else {
+        this.removeAllListeners('send'); // haven't sent yet, so let's not
+      }
     }
 
     return this;
